@@ -842,6 +842,49 @@ def test_enqueue_trial_skip_existing_handles_common_types(storage_mode: str, par
         assert before_enqueue == after_enqueue
 
 
+@pytest.mark.parametrize("storage_mode", STORAGE_MODES)
+def test_enqueue_trial_skip_existing_nan_handling(storage_mode: str) -> None:
+    if storage_mode in ("journal", "grpc_journal_file"):
+        import os
+        import tempfile
+        def can_symlink() -> bool:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                src = os.path.join(tmpdir, "src")
+                dst = os.path.join(tmpdir, "dst")
+                with open(src, "w") as f:
+                    f.write("test")
+                try:
+                    os.symlink(src, dst)
+                    return True
+                except OSError:
+                    return False
+        if not can_symlink():
+            pytest.skip("Environment does not support symlinks.")
+
+    # Test 0.0 followed by NaN (should enqueue both, not skip NaN)
+    with StorageSupplier(storage_mode) as storage:
+        study = create_study(storage=storage)
+        study.enqueue_trial({"x": 0.0})
+        study.enqueue_trial({"x": float("nan")}, skip_if_exists=True)
+        assert len(study.trials) == 2
+
+    # Test NaN followed by 0.0 (should enqueue both, not skip 0.0)
+    with StorageSupplier(storage_mode) as storage:
+        study = create_study(storage=storage)
+        study.enqueue_trial({"x": float("nan")})
+        study.enqueue_trial({"x": 0.0}, skip_if_exists=True)
+        assert len(study.trials) == 2
+
+    # Test NaN followed by NaN (should skip duplicate NaN)
+    with StorageSupplier(storage_mode) as storage:
+        study = create_study(storage=storage)
+        study.enqueue_trial({"x": float("nan")})
+        study.enqueue_trial({"x": float("nan")}, skip_if_exists=True)
+        assert len(study.trials) == 1
+
+
+
+
 @patch("optuna.study._optimize.gc.collect")
 def test_optimize_with_gc(collect_mock: Mock) -> None:
     study = create_study()
